@@ -1,45 +1,59 @@
 #here we apply the Expcetion Hadaling , So our API don't crash - 
 #1 Appy- user Question limit 
 #2 try except block to handle erro related to groq server 
-
-
-
-from fastapi import FastAPI,HTTPException
+from fastapi import FastAPI,HTTPException,Header,Request
 from groq import Groq
 import os
 from dotenv import load_dotenv
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+import uuid # To generate random unique numbers for session 
 
 # load important data from .env file
 load_dotenv()
+#Rate limiter Setup 
+#ger_remote_address = this identifies the user by the IP Address
+limiter = Limiter(key_func=get_remote_address)
 
 #opening the Resturnat
 app = FastAPI()
+#connecting limiter to your app
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 
 client = Groq(api_key=os.getenv("GROUQ_API_KEY")) # here we Give the Key 
-# Soln- 1 - we build the what shape of data user must Enter , Other shape is not acceptable 
-
-# so create A Class
-
-from pydantic import BaseModel # Pydantic Provide A Base Model that is the SUPER Powered BluePrint (that have Sequroty Sysatem) Normal Class DOn't Have this
-class QuestoinRequest(BaseModel): #BaseModel = The foundation structurethat Pydantic gives you to build YOUR structure on top of
-    question:str
-    user_id:str
 
 
 #creating fucntion to make ai brain 
 conversation_memory = {} #Dict we Created to Stored Conversation (it Stored in RAM) 
+active_sessions ={} # Creating the Session
 
-def brain_ai(question: str, user_id:str): #Problem 1 -  Write now We did't Define Shape of Data , input in Not in the Requrad Shape the API gose Crash 
+# so create A Class
+
+from pydantic import BaseModel # Pydantic Provide A Base Model that is the SUPER Powered BluePrint (that have Sequroty Sysatem) Normal Class DOn't Have this
+
+class LoginRequest(BaseModel):
+    username:str
+class QuestionRequest(BaseModel): #BaseModel = The foundation structurethat Pydantic gives you to build YOUR structure on top of
+    question:str
     
+
+# def ask_agent(request: Request,body: QuestionRequest,session_token: str = Header(None)):
+
+def brain_ai(question: str, username:str): #Problem 1 -  Write now We did't Define Shape of Data , input in Not in the Requrad Shape the API gose Crash 
+        
     # Adding the nmumbers limit
-    if(len(question)) >1000:
+    if (len(question)) >1000:
         raise HTTPException(
             status_code= 400,
             detail="Question is Too Long , Maximum 1000 Characters"
         )
     # If this user is new - give them a fresh notebook
-    if user_id not in conversation_memory:
-        conversation_memory[user_id] = [
+
+    if username not in conversation_memory:
+        conversation_memory[username] = [
             {
                 "role": "system",
                 "content": "You are a helpful AI assistant."
@@ -47,15 +61,16 @@ def brain_ai(question: str, user_id:str): #Problem 1 -  Write now We did't Defin
         ]
 
     # Add their new question to their notebook
-    conversation_memory[user_id].append({
+    conversation_memory[username].append({
         "role": "user",
-        "content": question
+        "content":question
     })
     
 
     #making the sliding window - so it can remember only last 10 messages
-    system_prompt = conversation_memory[user_id][0]
-    recent_messages = conversation_memory[user_id][-10:]
+
+    system_prompt = conversation_memory[username][0]
+    recent_messages = conversation_memory[username][-10:]
 
     #message that sent to the LLM 
     augumented_message = [system_prompt]+recent_messages
@@ -78,7 +93,7 @@ def brain_ai(question: str, user_id:str): #Problem 1 -  Write now We did't Defin
 
     #Also write the Answer in to the notbook 
 
-    conversation_memory[user_id].append({"role":"assistant","content":answer}) # that also written in notbook
+    conversation_memory[username].append({"role":"assistant","content":answer}) # that also written in notbook
     return answer
  
 #Creating a home route 
@@ -91,23 +106,49 @@ def home():
 # def ask_agent(question:str):
 #     result = brain_ai(question)
 #     return {"answer":result}
-
+@app.post("/login")
+def login(request:LoginRequest):
+    session_token =str(uuid.uuid4())
+    active_sessions[session_token] = request.username
+    return {
+        "message": f"Welcome {request.username}!",
+        "session_token": session_token
+    }
 #Soln - 1 Change the Ask Route 
 
 @app.post("/ask")
-def ask_agent(request:QuestoinRequest):
-    result = brain_ai(request.question, request.user_id)
+@limiter.limit("10/minute")
+def ask_agent(request: Request, body: QuestionRequest, session_token: str = Header(None)):
+    # Apply Session Check
+
+    if not session_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Please First Login And Get Unique Session Token"
+        )
+
+    if session_token not in active_sessions:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid session token . Login Again"
+        )
+    
+    username = active_sessions[session_token]
+
+    result = brain_ai(body.question, username) # Calling the brain to ask 
+
     return {
-        "user": request.user_id, # here We Go the Attribute bug - Then We saw 500 Status Code - in this Bug - the Attribute have different name 
-        "question": request.question,
+        "user": username,
+        "question": body.question,
         "answer": result
     }
 
-@app.get("/memory{user_id}")
-def see_memory(user_id:str):
-    memory = conversation_memory.get(user_id, [])
+
+@app.get("/memory/{username}")
+def see_memory(username: str):
+    memory = conversation_memory.get(username, [])
     return {
-        "user_id": user_id,
+        "username": username,
         "total_messages": len(memory),
         "conversation": memory
     }
