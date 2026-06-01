@@ -4,6 +4,7 @@
 from fastapi import FastAPI,HTTPException,Header,Request
 from groq import Groq
 import os
+from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,7 +24,7 @@ app = FastAPI()
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
-client = Groq(api_key=os.getenv("GROUQ_API_KEY")) # here we Give the Key 
+client = Groq(api_key=os.getenv("GROQ_API_KEY")) # here we Give the Key 
 
 
 #creating fucntion to make ai brain 
@@ -99,7 +100,7 @@ def brain_ai(question: str, username:str): #Problem 1 -  Write now We did't Defi
 #Creating a home route 
 @app.get("/")
 def home():
-    return {"message": "My AI Agent is Alive and Also Working!"}
+    return RedirectResponse(url="/docs") # So User Can Directly Lands in Swagger UI and test 
 
 # # this is the Asking Rout
 # @app.post("/ask")
@@ -117,7 +118,7 @@ def login(request:LoginRequest):
 #Soln - 1 Change the Ask Route 
 
 @app.post("/ask")
-@limiter.limit("10/minute")
+@limiter.limit("5/minute") # Reduced limit for deployment
 def ask_agent(request: Request, body: QuestionRequest, session_token: str = Header(None)):
     # Apply Session Check
 
