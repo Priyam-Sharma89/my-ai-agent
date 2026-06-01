@@ -144,11 +144,33 @@ def ask_agent(request: Request, body: QuestionRequest, session_token: str = Head
     }
 
 
-@app.get("/memory/{username}")
-def see_memory(username: str):
+@app.get("/memory") # here i decrese the resuseability to define new rote also the loop hole is - session if change and lost the covrsation 
+# so in future we will use the databases 
+def see_memory(
+    session_token: str = Header(None)
+):
+    # Guard - no token
+    if not session_token:
+        raise HTTPException(
+            status_code=401,
+            detail="No session token. Please login first."
+        )
+
+    # Guard - fake token
+    if session_token not in active_sessions:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid session token. Please login again."
+        )
+
+    # Token tells us WHO this is
+    username = active_sessions[session_token]
+
+    # Get THEIR memory only
     memory = conversation_memory.get(username, [])
+
     return {
-        "username": username,
+        "user": username,
         "total_messages": len(memory),
         "conversation": memory
     }
