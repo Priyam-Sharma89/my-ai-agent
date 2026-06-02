@@ -1,32 +1,21 @@
 #here we apply the Expcetion Hadaling , So our API don't crash - 
 #1 Appy- user Question limit 
 #2 try except block to handle erro related to groq server 
-from fastapi import FastAPI,HTTPException,Header,Request,Depends
+from fastapi import FastAPI,HTTPException,Header,Request
 from groq import Groq
-from fastapi.security import HTTPBearer,HTTPAuthorizationCredentials
 import os
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from jose import JWTError, jwt
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 import uuid # To generate random unique numbers for session 
-from datetime import datetime,timedelta # Adding for token expired at set time 
-
-
 
 # load important data from .env file
 load_dotenv()
 #Rate limiter Setup 
 #ger_remote_address = this identifies the user by the IP Address
-
-#----Creating secrete key 
-SECRET_KEY = os.getenv("SECRET_KEY","fallback-secret-change-this")
-ALGORITHM = "HS256"
-TOKEN_EXPIRE_MINUTES = 30
-
 limiter = Limiter(key_func=get_remote_address)
 
 #opening the Resturnat
@@ -37,20 +26,10 @@ app.add_middleware(SlowAPIMiddleware)
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY")) # here we Give the Key 
 
-# Add Sequrity 
-security =HTTPBearer()
 
 #creating fucntion to make ai brain 
 conversation_memory = {} #Dict we Created to Stored Conversation (it Stored in RAM) 
-
-#----Storing now RAM LAter I use DB 
-# In here a big problem we will solve further - password in plain text
-fake_users_db={
-    'rahul':"password123",
-    'priyam':"maypassword"
-}
-
-# active_sessions ={} # Creating the Session # Remove the session for JWT
+active_sessions ={} # Creating the Session
 
 # so create A Class
 
@@ -58,39 +37,9 @@ from pydantic import BaseModel # Pydantic Provide A Base Model that is the SUPER
 
 class LoginRequest(BaseModel):
     username:str
-    password:str
 class QuestionRequest(BaseModel): #BaseModel = The foundation structurethat Pydantic gives you to build YOUR structure on top of
     question:str
     
-##_____Adding JWP Setup 
-
-def create_token(username:str):
-    payload = {
-    "username": username,
-    "exp": datetime.utcnow()+timedelta(minutes=TOKEN_EXPIRE_MINUTES)
-}
-
-    #Sign in awith that key 
-
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-    return token
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
-    try:
-        #Decode that signature
-
-        payload = jwt.decode(token,SECRET_KEY,algorithms=[ALGORITHM])
-        username = payload.get("username")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return username
-    except JWTError:
-        raise HTTPException(
-            status_code=401,
-            detail="invalid token,login again"
-        )
 
 # def ask_agent(request: Request,body: QuestionRequest,session_token: str = Header(None)):
 
@@ -158,28 +107,10 @@ def home():
 # def ask_agent(question:str):
 #     result = brain_ai(question)
 #     return {"answer":result}
-
 @app.post("/login")
 def login(request:LoginRequest):
-    if request.username not in fake_users_db:
-        raise HTTPException(
-            status_code=401,
-            detail="Username not found."
-        )
-    if fake_users_db[request.username] != request.password:
-        raise HTTPException(
-            status_code=401,
-            detail="Wrong password"
-        )
-    
-    #Creating jwt token
-    token = create_token(request.username)
-    return {
-        "message": f"Welcome {request.username}!",
-        "access_token": token,
-        "token_type": "bearer",
-        "expires_in": f"{TOKEN_EXPIRE_MINUTES} minutes"
-    }
+    session_token =str(uuid.uuid4())
+    active_sessions[session_token] = request.username
     return {
         "message": f"Welcome {request.username}!",
         "session_token": session_token
@@ -188,19 +119,57 @@ def login(request:LoginRequest):
 
 @app.post("/ask")
 @limiter.limit("5/minute") # Reduced limit for deployment
-# def ask_agent(request: Request, body: QuestionRequest, session_token: str = Header(None)): # change the session to jwt tokens
-def ask_agent(request: Request, body: QuestionRequest,  username: str = Depends(verify_token)):
-    result = brain_ai(body.question,username)
+def ask_agent(request: Request, body: QuestionRequest, session_token: str = Header(None)):
+    # Apply Session Check
+
+    if not session_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Please First Login And Get Unique Session Token"
+        )
+
+    if session_token not in active_sessions:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid session token . Login Again"
+        )
+    
+    username = active_sessions[session_token]
+
+    result = brain_ai(body.question, username) # Calling the brain to ask 
+
     return {
         "user": username,
         "question": body.question,
         "answer": result
     }
-    
+
+
 @app.get("/memory") # here i decrese the resuseability to define new rote also the loop hole is - session if change and lost the covrsation 
 # so in future we will use the databases 
-def see_memory(username:str= Depends(verify_token)):
+def see_memory(
+    session_token: str = Header(None)
+):
+    # Guard - no token
+    if not session_token:
+        raise HTTPException(
+            status_code=401,
+            detail="No session token. Please login first."
+        )
+
+    # Guard - fake token
+    if session_token not in active_sessions:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid session token. Please login again."
+        )
+
+    # Token tells us WHO this is
+    username = active_sessions[session_token]
+
+    # Get THEIR memory only
     memory = conversation_memory.get(username, [])
+
     return {
         "user": username,
         "total_messages": len(memory),
