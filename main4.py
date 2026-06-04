@@ -222,4 +222,4 @@ def see_memory(username:str= Depends(verify_token)):
     }
 
 
-print(fake_users_db)
+# print(fake_users_db) #For checking the hashing work properly or not 
